@@ -1,268 +1,202 @@
-require("dotenv").config();
-const axios = require("axios");
-const WebSocket = require("ws");
-const TelegramBot = require("node-telegram-bot-api");
+import axios from "axios";
+import dotenv from "dotenv";
+dotenv.config();
 
-// =========================
-// CONFIG
-// =========================
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-const CHAT_ID = process.env.CHAT_ID;
+const SYMBOL = "BTCUSDT";          // ví dụ cho fetch realtime
+const PAIR = "SENTUSDT";           // dùng klines history
+const CONTRACT_TYPE = "PERPETUAL";
 
-if (!TELEGRAM_TOKEN || !CHAT_ID) {
-    console.error("❌ Missing TELEGRAM_TOKEN or CHAT_ID in .env");
-    process.exit(1);
+// =======================
+// START + CRON 1 PHÚT
+// =======================
+console.log("📌 Bot started!");
+
+runEveryMinute(); // chạy ngay khi start
+
+setInterval(() => {
+    runEveryMinute();
+}, 60 * 1000);
+
+// =======================
+// MANUAL TEST TELEGRAM
+// =======================
+async function testTelegram() {
+    await notify(
+        {
+            TELEGRAM_TOKEN: process.env.TELEGRAM_TOKEN,
+            CHAT_ID: process.env.CHAT_ID,
+        },
+        "✅ Test message from Node.js + Axios!"
+    );
+}
+// testTelegram(); // ← bật để test 1 lần
+
+// =======================
+// TIME FORMAT
+// =======================
+function formatTime(ts) {
+    const d = new Date(ts);
+
+    const yyyy = d.getFullYear();
+    const MM = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+
+    const HH = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+
+    return `${yyyy}-${MM}-${dd} ${HH}:${mm}:${ss}`;
 }
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
+// ===============================
+// FETCH HISTORY KLINES (1M)
+// ===============================
+async function getHistoryKlines({
+                                    pair = PAIR,
+                                    limit = 100,
+                                    endTime = Date.now(),
+                                    interval = "1m",
+                                    contractType = CONTRACT_TYPE
+                                }) {
+    const url =
+        `https://www.binance.com/fapi/v1/continuousKlines?interval=${interval}` +
+        `&endTime=${endTime}&limit=${limit}&pair=${pair}&contractType=${contractType}`;
 
-const SYMBOL = "BTCUSDT";
+    try {
+        const res = await axios.get(url);
+        const data = res.data;
 
-// Lưu nến 1m
-let candles = [];
-
-// =========================
-// FETCH CANDLE HISTORY
-// =========================
-async function fetchHistory() {
-    const url = "https://www.binance.com/fapi/v1/aggTrades?limit=80&symbol=" + SYMBOL;
-
-    console.log("[REST] Fetching candle history...");
-
-    const res = await axios.get(url);
-    const trades = res.data;
-
-    candles = aggregateTradesToCandles(trades);
-
-    console.log(`[REST] Loaded ${candles.length} candles`);
-    console.log("[REST] Last candle:", candles[candles.length - 1]);
-}
-
-function aggregateTradesToCandles(trades) {
-    const map = {};
-
-    trades.forEach((t) => {
-        const minute = Math.floor(t.T / 60000);
-        const price = parseFloat(t.p);
-
-        if (!map[minute]) {
-            map[minute] = {
-                time: minute,
-                open: price,
-                high: price,
-                low: price,
-                close: price,
-            };
-        } else {
-            map[minute].high = Math.max(map[minute].high, price);
-            map[minute].low = Math.min(map[minute].low, price);
-            map[minute].close = price;
+        if (!Array.isArray(data)) {
+            console.log("❌ API Error:", data);
+            return [];
         }
+
+        // Format candle
+        return data.map(c => ({
+            time: formatTime(c[0]),       // open time
+            timestamp: c[0],
+            open: parseFloat(c[1]),
+            high: parseFloat(c[2]),
+            low: parseFloat(c[3]),
+            close: parseFloat(c[4]),
+            volume: parseFloat(c[5]),
+            closeTime: c[6],
+            trades: c[8]
+        }));
+    } catch (err) {
+        console.log("❌ Fetch klines error:", err.message);
+        return [];
+    }
+}
+
+// =======================
+// JOB CHÍNH
+// =======================
+async function runEveryMinute() {
+    console.log("\n⏳ Running job...");
+
+    const candles = await getHistoryKlines({
+        pair: PAIR,
+        limit: 50,
+        endTime: Date.now()
     });
 
-    return Object.values(map);
+    if (!Array.isArray(candles) || candles.length === 0) {
+        console.log("⚠️ No candle data");
+        return;
+    }
+
+    console.log("📘 Latest Candles:\n", candles.slice(-5)); // in 5 nến cuối
+
+    await checkSignals(candles, {
+        TELEGRAM_TOKEN: process.env.TELEGRAM_TOKEN,
+        CHAT_ID: process.env.CHAT_ID,
+    });
 }
 
-// =========================
-// TELEGRAM
-// =========================
-function notify(msg) {
-    console.log("[TELEGRAM] Sending:", msg);
-    bot.sendMessage(CHAT_ID, msg).catch(err => console.log("Telegram Error:", err.message));
-}
-
-// =========================
-// CONDITIONS WITH LOGGING
-// =========================
-
-function cond1_up() {
+// ===========================================
+// SIGNALS — LONG (đã đổi tên theo yêu cầu)
+// ===========================================
+function long1(candles) {
     if (candles.length < 10) return false;
-    const arr = candles.slice(-10);
-
-    let ok = true;
-    for (let i = 1; i < arr.length; i++) {
-        if (!(arr[i].close > arr[i - 1].close)) ok = false;
-    }
-
-    console.log("[COND1] 10 nến tăng dần:", ok);
-    return ok;
+    const arr = candles.slice(-10).map(c => c.close);
+    return arr.every((p, i) => i === 0 || p > arr[i - 1]);
 }
 
-function cond2_up_down() {
+function long2(candles) {
     if (candles.length < 7) return false;
-    const arr = candles.slice(-7);
+    const arr = candles.slice(-7).map(c => c.close);
 
-    let inc = true;
-    for (let i = 1; i < 6; i++) {
-        if (!(arr[i].close > arr[i - 1].close)) inc = false;
-    }
-
-    let dec = arr[6].close < arr[5].close;
-
-    console.log(`[COND2] 6 tăng: ${inc}, sau đó 1 giảm: ${dec}`);
-
-    return inc && dec;
+    return (
+        arr.slice(0, 6).every((p, i) => i === 0 || p > arr[i - 1]) &&
+        arr[6] < arr[5]
+    );
 }
 
-function cond3_volatile() {
+function long3(candles) {
     if (candles.length < 3) return false;
 
-    const arr = candles.slice(-3);
-    const results = arr.map(c => (c.high - c.low) / c.low);
-
-    const ok = results.every(v => v > 0.0025);
-
-    console.log("[COND3] 3 nến biến động mạnh:", results, "=>", ok);
-
-    return ok;
+    return candles.slice(-3).every(c => {
+        return (c.high - c.low) / c.low > 0.0025;
+    });
 }
 
-// =========================
-// SHORT CONDITIONS
-// =========================
-
-function checkShort1() {
+// ===========================================
+// SIGNALS — SHORT (giữ nguyên)
+// ===========================================
+function short1(candles) {
     if (candles.length < 10) return false;
-    const arr = candles.slice(-10);
-
-    let ok = true;
-    for (let i = 1; i < arr.length; i++) {
-        if (!(arr[i].close < arr[i - 1].close)) ok = false;
-    }
-
-    console.log("[SHORT1] 10 nến giảm dần:", ok);
-    return ok;
+    const arr = candles.slice(-10).map(c => c.close);
+    return arr.every((p, i) => i === 0 || p < arr[i - 1]);
 }
 
-function checkShort2() {
+function short2(candles) {
     if (candles.length < 7) return false;
-    const arr = candles.slice(-7);
+    const arr = candles.slice(-7).map(c => c.close);
 
-    let dec = true;
-    for (let i = 1; i < 6; i++) {
-        if (!(arr[i].close < arr[i - 1].close)) dec = false;
-    }
-
-    let inc = arr[6].close > arr[5].close;
-
-    console.log(`[SHORT2] 6 giảm: ${dec}, sau đó 1 tăng: ${inc}`);
-
-    return dec && inc;
+    return (
+        arr.slice(0, 6).every((p, i) => i === 0 || p < arr[i - 1]) &&
+        arr[6] > arr[5]
+    );
 }
 
-function checkShort3() {
+function short3(candles) {
     if (candles.length < 3) return false;
 
-    const arr = candles.slice(-3);
-    const results = arr.map(c => (c.high - c.low) / c.high);
-
-    const ok = results.every(v => v > 0.0025);
-
-    console.log("[SHORT3] 3 nến biến động mạnh (giảm):", results, "=>", ok);
-
-    return ok;
-}
-
-// =========================
-// CHECK LONG / SHORT
-// =========================
-function checkSignals() {
-    console.log("==== Checking signals ====");
-
-    if (cond1_up()) notify("📈 LONG – Điều kiện 1 đạt!");
-    if (cond2_up_down()) notify("📈 LONG – Điều kiện 2 đạt!");
-    if (cond3_volatile()) notify("📈 LONG – Điều kiện 3 đạt!");
-
-    if (checkShort1()) notify("📉 SHORT – Điều kiện 1 đạt!");
-    if (checkShort2()) notify("📉 SHORT – Điều kiện 2 đạt!");
-    if (checkShort3()) notify("📉 SHORT – Điều kiện 3 đạt!");
-}
-
-// =========================
-// WEBSOCKET
-// =========================
-function startWS() {
-    console.log("[WS] Connecting...");
-    const ws = new WebSocket("wss://fstream.binance.com/market/stream");
-
-    ws.on("open", () => {
-        console.log("[WS] Connected");
-
-        ws.send(
-            JSON.stringify({
-                method: "SUBSCRIBE",
-                params: [
-                    "btcusdt_perpetual@continuousKline_1m",
-                    "btcusdt@aggTrade",
-                ],
-                id: 4,
-            })
-        );
-
-        console.log("[WS] Subscribed to streams");
-    });
-
-    ws.on("message", (raw) => {
-        const msg = JSON.parse(raw);
-
-        if (msg.stream === "btcusdt@aggTrade") {
-            console.log("[WS] trade:", msg.data.p, "qty:", msg.data.q);
-            updateFromTrade(msg.data);
-        }
-    });
-
-    ws.on("error", (err) => {
-        console.log("[WS] ERROR:", err.message);
-    });
-
-    ws.on("close", () => {
-        console.log("[WS] Disconnected. Reconnecting in 2s...");
-        setTimeout(startWS, 2000);
+    return candles.slice(-3).every(c => {
+        return (c.high - c.low) / c.high > 0.0025;
     });
 }
 
-// =========================
-// UPDATE CANDLE
-// =========================
-function updateFromTrade(trade) {
-    const price = parseFloat(trade.p);
-    const minute = Math.floor(trade.T / 60000);
+// ===============================
+// TELEGRAM NOTIFY (AXIOS)
+// ===============================
+async function notify(env, msg) {
+    const url = `https://api.telegram.org/bot${env.TELEGRAM_TOKEN}/sendMessage`;
 
-    let last = candles[candles.length - 1];
-    const lastMin = last?.time;
-
-    if (!last || minute > lastMin) {
-        console.log("[CANDLE] New candle created");
-        candles.push({
-            time: minute,
-            open: price,
-            high: price,
-            low: price,
-            close: price,
+    try {
+        await axios.post(url, {
+            chat_id: env.CHAT_ID,
+            text: msg,
         });
-    } else {
-        console.log("[CANDLE] Update current candle:", price);
-        last.close = price;
-        last.high = Math.max(last.high, price);
-        last.low = Math.min(last.low, price);
+
+        console.log("📨 TG SENT:", msg);
+    } catch (e) {
+        console.log("❌ TG ERROR:", e.message);
     }
-
-    if (candles.length > 200) candles.shift();
-
-    checkSignals();
 }
 
-// =========================
-// START
-// =========================
-(async () => {
-    // testTelegram();
-    await fetchHistory();
-    startWS();
-})();
+// ===============================
+// CHECK ALL SIGNALS
+// ===============================
+async function checkSignals(candles, env) {
+    // ——— LONG ———
+    if (long1(candles)) await notify(env, "📈 LONG – Điều kiện 1");
+    if (long2(candles)) await notify(env, "📈 LONG – Điều kiện 2");
+    if (long3(candles)) await notify(env, "📈 LONG – Điều kiện 3");
 
-function testTelegram() {
-    bot.sendMessage(CHAT_ID, "✅ Telegram Test: Bot đã hoạt động!")
-        .then(() => console.log("[TEST] Gửi test Telegram thành công"))
-        .catch(err => console.error("[TEST] Lỗi gửi Telegram:", err.message));
+    // ——— SHORT ———
+    if (short1(candles)) await notify(env, "📉 SHORT – Điều kiện 1");
+    if (short2(candles)) await notify(env, "📉 SHORT – Điều kiện 2");
+    if (short3(candles)) await notify(env, "📉 SHORT – Điều kiện 3");
 }
