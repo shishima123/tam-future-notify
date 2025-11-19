@@ -256,9 +256,9 @@ function updateFromTrade(trade) {
 // START
 // =========================
 (async () => {
-    testTelegram();
-    // await fetchHistory();
-    // startWS();
+    // testTelegram();
+    await fetchHistory();
+    startWS();
 })();
 
 function testTelegram() {
