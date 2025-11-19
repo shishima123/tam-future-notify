@@ -108,7 +108,7 @@ async function runEveryMinute() {
         return;
     }
 
-    console.log("📘 Latest Candles:\n", candles.slice(-5)); // in 5 nến cuối
+    console.log("📘 Latest Candles:\n", candles); // in 5 nến cuối
 
     await checkSignals(candles, {
         TELEGRAM_TOKEN: process.env.TELEGRAM_TOKEN,
