@@ -2,8 +2,7 @@ import axios from "axios";
 import dotenv from "dotenv";
 dotenv.config();
 
-const SYMBOL = "BTCUSDT";          // ví dụ cho fetch realtime
-const PAIR = "SENTUSDT";           // dùng klines history
+const PAIR = "BTCUSDT";           // dùng klines history
 const CONTRACT_TYPE = "PERPETUAL";
 
 // =======================
