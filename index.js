@@ -1,3 +1,4 @@
+require("dotenv").config();
 const axios = require("axios");
 const WebSocket = require("ws");
 const TelegramBot = require("node-telegram-bot-api");
@@ -5,8 +6,13 @@ const TelegramBot = require("node-telegram-bot-api");
 // =========================
 // CONFIG
 // =========================
-const TELEGRAM_TOKEN = "8299170091:AAGF7AnPgSbKOtnC9rMW3dpDc8EZPzg1wy4";
-const CHAT_ID = "-1003470352002";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const CHAT_ID = process.env.CHAT_ID;
+
+if (!TELEGRAM_TOKEN || !CHAT_ID) {
+    console.error("❌ Missing TELEGRAM_TOKEN or CHAT_ID in .env");
+    process.exit(1);
+}
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
 
@@ -250,6 +256,13 @@ function updateFromTrade(trade) {
 // START
 // =========================
 (async () => {
-    await fetchHistory();
-    startWS();
+    testTelegram();
+    // await fetchHistory();
+    // startWS();
 })();
+
+function testTelegram() {
+    bot.sendMessage(CHAT_ID, "✅ Telegram Test: Bot đã hoạt động!")
+        .then(() => console.log("[TEST] Gửi test Telegram thành công"))
+        .catch(err => console.error("[TEST] Lỗi gửi Telegram:", err.message));
+}
