@@ -51,13 +51,15 @@ function formatTime(ts) {
 // ===============================
 // FETCH HISTORY KLINES (1M)
 // ===============================
-async function getHistoryKlines({
-                                    pair = PAIR,
-                                    limit = 100,
-                                    endTime = Date.now(),
-                                    interval = "1m",
-                                    contractType = CONTRACT_TYPE
-                                }) {
+async function getHistoryKlines(
+    {
+        pair = PAIR,
+        limit = 10,
+        endTime = Date.now(),
+        interval = "1m",
+        contractType = CONTRACT_TYPE
+    }
+) {
     const url =
         `https://www.binance.com/fapi/v1/continuousKlines?interval=${interval}` +
         `&endTime=${endTime}&limit=${limit}&pair=${pair}&contractType=${contractType}`;
